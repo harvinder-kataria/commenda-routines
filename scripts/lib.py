@@ -50,7 +50,40 @@ def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str
     raise RuntimeError(f"All Gemini models exhausted. Last error: {last_error}")
 
 
+VERTEX_REDIRECT = "vertexaisearch.cloud.google.com/grounding-api-redirect"
+
+
+def clean_brief_text(text: str) -> str:
+    """Strip Google Search redirect wrappers, convert Markdown links to Slack format."""
+    # Nested case: [[domain/path](http://real-url)](https://vertexaisearch.../redirect/...)
+    text = re.sub(
+        r'\[\[([^\]]+)\]\((https?://[^\)\s]+)\)\]\(https?://' + re.escape(VERTEX_REDIRECT) + r'/[^\)]+\)',
+        r'<\2|\1>',
+        text,
+    )
+    # Single case wrapping a redirect: [display](https://vertexaisearch.../redirect/...) -> just display
+    text = re.sub(
+        r'\[([^\]]+)\]\(https?://' + re.escape(VERTEX_REDIRECT) + r'/[^\)]+\)',
+        r'\1',
+        text,
+    )
+    # Any remaining plain Markdown link [text](url) -> Slack <url|text>
+    text = re.sub(
+        r'\[([^\]\n]+)\]\((https?://[^\)\s]+)\)',
+        r'<\2|\1>',
+        text,
+    )
+    # Slack link wrapping a redirect: <https://vertexaisearch.../redirect/...|text> -> just text
+    text = re.sub(
+        r'<https?://' + re.escape(VERTEX_REDIRECT) + r'/[^|\s>]+\|([^>]+)>',
+        r'\1',
+        text,
+    )
+    return text
+
+
 def slack_post(text: str, channel: str = CHANNEL_ID) -> dict:
+    text = clean_brief_text(text)
     url = "https://slack.com/api/chat.postMessage"
     headers = {
         "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
