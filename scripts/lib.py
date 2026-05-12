@@ -1,6 +1,7 @@
 """Shared utilities for the Commenda AM Brief bot."""
 import os
 import re
+import time
 import requests
 from datetime import datetime, timezone, timedelta
 from google import genai
@@ -14,19 +15,39 @@ USER_ID = "U09SB67C13P"
 
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
+FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 
-def gemini_chat(prompt: str, with_search: bool = True, model: str = "gemini-2.5-flash") -> str:
+
+def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str:
     config = None
     if with_search:
         config = types.GenerateContentConfig(
             tools=[types.Tool(google_search=types.GoogleSearch())]
         )
-    response = _gemini_client.models.generate_content(
-        model=model,
-        contents=prompt,
-        config=config,
-    )
-    return response.text or ""
+    models = [model] if model else FALLBACK_MODELS
+    last_error = None
+    for m in models:
+        for attempt in range(3):
+            try:
+                response = _gemini_client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=config,
+                )
+                return response.text or ""
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                is_transient = any(s in err_str for s in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED"))
+                if not is_transient:
+                    raise
+                if attempt < 2:
+                    wait = 15 * (attempt + 1)
+                    print(f"[gemini] {m} transient error (attempt {attempt+1}/3), waiting {wait}s")
+                    time.sleep(wait)
+                else:
+                    print(f"[gemini] {m} exhausted retries, trying next model")
+    raise RuntimeError(f"All Gemini models exhausted. Last error: {last_error}")
 
 
 def slack_post(text: str, channel: str = CHANNEL_ID) -> dict:
