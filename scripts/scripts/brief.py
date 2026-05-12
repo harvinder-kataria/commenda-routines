@@ -34,3 +34,65 @@ US-heavy baseline. Today's regional lean: {lean} Skip pure GAAP/regulatory updat
 ## Format (Slack mrkdwn: *bold*, _italic_, `inline code`, > blockquote, fenced code blocks)
 
 ### Masthead (one fenced code block at top)
+```
+COMMENDA · AM BRIEF
+─────────────────────────────
+DATE   {ctx['date_display']}
+ITEMS  <N>
+SCOPE  <2-4 category tokens dot-separated>
+```
+
+### Story block (repeat N times)
+`<NN> ▎ <CATEGORY · ENTITY> ▎ <MON DD>`
+*<One-sentence headline. Action verb. Period at end.>*
+<Two short sentences of fact. Numbers and proper nouns first. No hedging.>
+
+> _Take:_ <one sentence Commenda-specific implication. Optional second short sentence.>
+
+↳  <[domain/path](full url)>
+
+Separator between stories: a single line of `─────────────────────────────`
+
+### Footer (one fenced code block at bottom)
+```
+WATCHING  <item> · <item> · <item>
+SKIPPED   <category> · <category> · <category>
+```
+
+### Taxonomy (kicker tags, pick exactly one per item)
+`AI` · `DEAL` · `PRODUCT` · `DISTRIBUTION` · `TAX AUTO` · `BIG 4` · `COMPETITOR` · `REGULATORY` · `TOOL` · `INDIA` · `UK` · `MEXICO` · `EU` · `LATAM`
+
+## Hard rules
+- NO em-dashes anywhere. Use colons, periods, commas, parentheses.
+- Headline ends with a period. Declarative, never a question.
+- Body: exactly two sentences, ≤ 45 words combined.
+- Take: blockquote, ≤ 30 words, leads with `_Take:_`.
+- Link: `↳` arrow, link text is `domain/path`.
+- Item count in masthead must equal stories below.
+- Zero emoji in the body.
+- Length: 5 typical, 6-7 heavy news days, never 8+. Never pad.
+- EVERY brief includes at least one `TOOL` item with explicit maturity and Commenda-fit.
+
+## Process
+1. Use Google Search to find news from the last 24-36 hours across the coverage priorities. Run varied queries (Anthropic, Big 4, Intuit/Xero/Sage AI, accounting startup funding, AI ERP multi-entity, named-tool watchlist news, plus today's regional queries based on lean).
+2. Verify freshness. Reject older items unless strong fresh angle.
+3. Cross-check against the recently-posted URL list. SKIP duplicates.
+4. Draft the brief in the format above.
+5. Output ONLY the brief text. No preamble, no explanation, no markdown fences wrapping the whole thing.
+
+OUTPUT THE BRIEF NOW.
+"""
+
+
+def main():
+    ctx = get_today_context()
+    lean = regional_lean_for_day(ctx["weekday"])
+    msgs = slack_read_channel(limit=50, days=14)
+    dedup = extract_dedup(msgs)
+    brief = gemini_chat(build_prompt(ctx, lean, dedup["urls"]), with_search=True)
+    result = slack_post(brief)
+    print(f"Brief posted: ts={result.get('ts')}, channel={CHANNEL_ID}")
+
+
+if __name__ == "__main__":
+    main()
