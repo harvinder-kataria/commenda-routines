@@ -16,6 +16,7 @@ USER_ID = "U09SB67C13P"
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
+USER_AGENT = "Mozilla/5.0 (compatible; CommendaAMBot/1.0; +https://github.com/harvinder-kataria/commenda-routines)"
 
 
 def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str:
@@ -55,31 +56,48 @@ VERTEX_REDIRECT = "vertexaisearch.cloud.google.com/grounding-api-redirect"
 
 def clean_brief_text(text: str) -> str:
     """Strip Google Search redirect wrappers, convert Markdown links to Slack format."""
-    # Nested case: [[domain/path](http://real-url)](https://vertexaisearch.../redirect/...)
     text = re.sub(
         r'\[\[([^\]]+)\]\((https?://[^\)\s]+)\)\]\(https?://' + re.escape(VERTEX_REDIRECT) + r'/[^\)]+\)',
         r'<\2|\1>',
         text,
     )
-    # Single case wrapping a redirect: [display](https://vertexaisearch.../redirect/...) -> just display
     text = re.sub(
         r'\[([^\]]+)\]\(https?://' + re.escape(VERTEX_REDIRECT) + r'/[^\)]+\)',
         r'\1',
         text,
     )
-    # Any remaining plain Markdown link [text](url) -> Slack <url|text>
     text = re.sub(
         r'\[([^\]\n]+)\]\((https?://[^\)\s]+)\)',
         r'<\2|\1>',
         text,
     )
-    # Slack link wrapping a redirect: <https://vertexaisearch.../redirect/...|text> -> just text
     text = re.sub(
         r'<https?://' + re.escape(VERTEX_REDIRECT) + r'/[^|\s>]+\|([^>]+)>',
         r'\1',
         text,
     )
     return text
+
+
+def url_works(url: str, timeout: float = 6.0) -> bool:
+    """Return True if the URL responds with a non-error status within timeout."""
+    if not url or not isinstance(url, str) or not url.startswith("http"):
+        return False
+    if VERTEX_REDIRECT in url:
+        return False
+    headers = {"User-Agent": USER_AGENT}
+    try:
+        r = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        if r.status_code < 400:
+            return True
+        if r.status_code in (403, 405, 406, 410, 415, 429):
+            r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True, stream=True)
+            r.close()
+            return r.status_code < 400
+        return False
+    except requests.RequestException as e:
+        print(f"[url-check] {url} -> {type(e).__name__}: {e}")
+        return False
 
 
 def slack_post(text: str, channel: str = CHANNEL_ID) -> dict:
@@ -98,7 +116,7 @@ def slack_post(text: str, channel: str = CHANNEL_ID) -> dict:
     return body
 
 
-def slack_read_channel(channel: str = CHANNEL_ID, limit: int = 50, days: int = 14) -> list:
+def slack_read_channel(channel: str = CHANNEL_ID, limit: int = 100, days: int = 14) -> list:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
     url = "https://slack.com/api/conversations.history"
     headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
@@ -112,16 +130,33 @@ def slack_read_channel(channel: str = CHANNEL_ID, limit: int = 50, days: int = 1
 
 
 URL_RE = re.compile(r"https?://[^\s<>|]+")
+KICKER_RE = re.compile(r"▎\s*[^·]+·\s*([A-Z][A-Z0-9 \-&\.]+?)\s*▎")
+HEADLINE_RE = re.compile(r"^\*([^*\n]+?)\*\s*$", re.MULTILINE)
 
 
 def extract_dedup(messages: list) -> dict:
+    """Pull URLs, company entities, and headlines from recent channel posts."""
     seen_urls = set()
+    seen_entities = []
+    seen_headlines = []
     for msg in messages:
         text = msg.get("text", "")
         for m in URL_RE.findall(text):
             url = m.rstrip(">,.;:!?)")
             seen_urls.add(url)
-    return {"urls": seen_urls}
+        for ent in KICKER_RE.findall(text):
+            e = ent.strip()
+            if e and e not in seen_entities:
+                seen_entities.append(e)
+        for hl in HEADLINE_RE.findall(text):
+            h = hl.strip()
+            if h and h not in seen_headlines:
+                seen_headlines.append(h)
+    return {
+        "urls": seen_urls,
+        "entities": seen_entities[:80],
+        "headlines": seen_headlines[:60],
+    }
 
 
 def get_today_context() -> dict:
