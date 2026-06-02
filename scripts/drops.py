@@ -1,15 +1,17 @@
 """Gamechanger Drops checker. Runs M-F at 10/13/16/19 IST. Silent unless material news."""
+import re
 from lib import (
     gemini_chat, slack_post, slack_read_channel, extract_dedup,
-    get_today_context, CHANNEL_ID,
+    get_today_context, url_works, CHANNEL_ID, URL_RE,
 )
 
 
 def main():
     ctx = get_today_context()
-    msgs = slack_read_channel(limit=50, days=14)
+    msgs = slack_read_channel(limit=100, days=14)
     dedup = extract_dedup(msgs)
-    seen_urls_str = "\n".join(f"- {u}" for u in sorted(dedup["urls"])[:200]) or "(none)"
+    seen_urls_str = "\n".join(f"- {u}" for u in sorted(dedup["urls"])[:150]) or "(none)"
+    seen_entities_str = ", ".join(dedup["entities"][:60]) or "(none)"
 
     prompt = f"""You are checking for "gamechanger" news drops in accounting/finance/tax tech IN THE LAST 3 HOURS only. Use Google Search.
 
@@ -26,19 +28,26 @@ A "gamechanger" materially shifts Commenda's competitive position. Examples:
 
 DO NOT post for:
 - Routine vendor PR
-- Listicles
-- "Trend pieces" without product news
-- Stories that are <3 hours old but already covered today
+- Listicles or trend pieces without product news
+- Stories already covered today
+- Anything where you cannot cite a verifiable URL from Google Search results
+
+## ABSOLUTE ACCURACY RULES
+- NEVER fabricate a URL. If you cannot cite a real URL from search results, output `QUIET`.
+- NEVER invent products, partnerships, or funding rounds.
+
+## Already covered (do not repeat)
+{seen_entities_str}
 
 ## Already posted URLs (do not repeat)
 {seen_urls_str}
 
 ## Decision logic
-1. Search Google for fresh news (last 3 hours). Run 5-6 queries.
-2. Verify nothing is in the dedup list.
-3. Score: would Harvinder need to know about this today to do his job better?
-4. If yes for AT LEAST ONE candidate: produce a post in the format below.
-5. If no candidates pass: output exactly the single token `QUIET` and nothing else.
+1. Search Google for fresh news (last 3 hours).
+2. Verify URL exists in your search results.
+3. Score: would Harvinder need to know this today?
+4. If yes for AT LEAST ONE candidate: produce the post below.
+5. If no: output exactly the single token `QUIET`.
 
 ## Post format (Slack mrkdwn)
 ```
@@ -50,11 +59,11 @@ DROP · GAMECHANGER · <MON DD HH:MM IST>
 
 > _Take:_ <one sentence Commenda-specific implication.>
 
-↳ <[domain/path](url)>
+↳ <https://full-url|domain/path>
 
 ## Hard rules
 - NO em-dashes.
-- Output EITHER the post (format above) OR exactly `QUIET`. Nothing else, no preamble.
+- Output EITHER the post OR `QUIET`. Nothing else.
 
 OUTPUT NOW.
 """
@@ -62,6 +71,14 @@ OUTPUT NOW.
     if resp.upper().startswith("QUIET") or len(resp) < 50:
         print("No gamechanger; staying silent.")
         return
+
+    # URL validation: extract URLs from the post, drop the post if any are broken
+    urls = URL_RE.findall(resp)
+    bad = [u for u in urls if not url_works(u.rstrip(">,.;:!?)"))]
+    if bad:
+        print(f"Dropping post, broken URLs: {bad}")
+        return
+
     result = slack_post(resp)
     print(f"Drop posted: ts={result.get('ts')}")
 
