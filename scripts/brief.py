@@ -4,7 +4,7 @@ import re
 from lib import (
     gemini_chat_with_sources, slack_post, slack_read_channel, extract_dedup,
     get_today_context, regional_lean_for_day, url_works, extract_domain,
-    resolve_grounding_domains, CHANNEL_ID,
+    resolve_grounding_domains, resolve_url, CHANNEL_ID, VERTEX_REDIRECT,
 )
 
 
@@ -86,11 +86,9 @@ Return EXACTLY this JSON structure. No prose before or after, no code fences.
 - "headline": one sentence, declarative, period at end, plain text.
 - "body": two sentences, ≤ 45 words combined.
 - "take": one sentence, ≤ 30 words.
-- "client_q": OPTIONAL. Include ONLY on items likely to trigger a client question (tax/reporting changes, product deprecations, big competitor moves, funding that shifts competitive landscape). One question a client would realistically ask Harvinder, phrased in the client's voice. ≤ 25 words. Omit the field entirely if not applicable. Max 2 items per brief should have this.
-- "url": MUST be from your actual Google Search results.
-- "url_display": short "domain/path" form.
-- "watching": 4-6 short tags. IMPORTANT: include 1-2 PENDING REGULATIONS in this list (e.g. "Pillar 2 US implementation timeline", "Section 174 R&E repeal bill", "PCAOB AI audit standard draft", "SEC climate disclosure rule status") alongside the usual ongoing storylines.
-- "skipped": 3-5 categories of noise filtered out.
+- "client_q": OPTIONAL. Include ONLY on items likely to trigger a client question (tax/reporting changes, product deprecations, big competitor moves, funding that shifts competitive landscape). One question a client would realistically ask Harvinder. ≤ 25 words. Omit the field entirely if not applicable. Max 2 items per brief should have this.
+- "url": use the URL exactly as it appears in your Google Search results (may be a redirect URL, the system will resolve it).
+- "url_display": short "domain/path" form, based on the actual publisher domain if you know it.
 
 ## Length
 - "items": 5 typical, 6-7 heavy news, 3-4 quiet. Never 8+.
@@ -137,6 +135,21 @@ def format_brief(data, ctx, grounding_domains=None):
     items = []
     for it in raw_items:
         url = (it.get("url") or "").strip()
+
+        # Resolve Vertex Search grounding redirects to the real publisher URL
+        if VERTEX_REDIRECT in url:
+            resolved = resolve_url(url)
+            if resolved and VERTEX_REDIRECT not in resolved and resolved.startswith("http"):
+                print(f"[resolve] Vertex redirect -> {resolved}")
+                url = resolved
+                it["url"] = resolved
+                dom = extract_domain(resolved)
+                if dom and (not it.get("url_display") or VERTEX_REDIRECT in (it.get("url_display") or "")):
+                    it["url_display"] = dom
+            else:
+                print(f"[validation] DROP could not resolve Vertex redirect: {url[:80]}...")
+                continue
+
         url_domain = extract_domain(url)
 
         if not url_works(url):
