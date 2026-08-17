@@ -21,6 +21,7 @@ _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 USER_AGENT = "Mozilla/5.0 (compatible; CommendaAMBot/1.0; +https://github.com/harvinder-kataria/commenda-routines)"
 VERTEX_REDIRECT = "vertexaisearch.cloud.google.com/grounding-api-redirect"
+MIN_RESPONSE_LEN = 20
 
 
 def _generate(model: str, prompt: str, config):
@@ -43,8 +44,14 @@ def _extract_sources(response) -> list:
     return sources
 
 
+def _finish_reason(response) -> str:
+    if not response.candidates:
+        return "no_candidates"
+    return str(getattr(response.candidates[0], "finish_reason", "unknown"))
+
+
 def gemini_chat_with_sources(prompt: str, with_search: bool = True, model: str = None):
-    """Returns (text, grounding_source_uris). Use this when you need to validate URLs."""
+    """Returns (text, grounding_source_uris). Retries on transient errors AND on empty responses."""
     config = None
     if with_search:
         config = types.GenerateContentConfig(
@@ -56,7 +63,21 @@ def gemini_chat_with_sources(prompt: str, with_search: bool = True, model: str =
         for attempt in range(3):
             try:
                 response = _generate(m, prompt, config)
-                return (response.text or ""), _extract_sources(response)
+                text = (response.text or "").strip()
+                sources = _extract_sources(response)
+
+                # Empty-response guard: treat as retryable
+                if len(text) < MIN_RESPONSE_LEN:
+                    fr = _finish_reason(response)
+                    print(f"[gemini] {m} empty response (attempt {attempt+1}/3), finish_reason={fr}, len={len(text)}")
+                    last_error = RuntimeError(f"Empty response from {m}, finish_reason={fr}")
+                    if attempt < 2:
+                        time.sleep(15 * (attempt + 1))
+                        continue
+                    else:
+                        break  # exhausted this model, fall through to next
+
+                return text, sources
             except Exception as e:
                 last_error = e
                 err_str = str(e)
