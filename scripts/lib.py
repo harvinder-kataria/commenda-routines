@@ -2,6 +2,9 @@
 import os
 import re
 import time
+import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 from datetime import datetime, timezone, timedelta
 from google import genai
@@ -17,9 +20,31 @@ _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 USER_AGENT = "Mozilla/5.0 (compatible; CommendaAMBot/1.0; +https://github.com/harvinder-kataria/commenda-routines)"
+VERTEX_REDIRECT = "vertexaisearch.cloud.google.com/grounding-api-redirect"
 
 
-def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str:
+def _generate(model: str, prompt: str, config):
+    return _gemini_client.models.generate_content(
+        model=model, contents=prompt, config=config,
+    )
+
+
+def _extract_sources(response) -> list:
+    """Pull grounding source URIs from a Gemini response (real URLs from Google Search)."""
+    sources = []
+    for candidate in (response.candidates or []):
+        gm = getattr(candidate, "grounding_metadata", None)
+        if not gm:
+            continue
+        for chunk in (getattr(gm, "grounding_chunks", None) or []):
+            web = getattr(chunk, "web", None)
+            if web and getattr(web, "uri", None):
+                sources.append(web.uri)
+    return sources
+
+
+def gemini_chat_with_sources(prompt: str, with_search: bool = True, model: str = None):
+    """Returns (text, grounding_source_uris). Use this when you need to validate URLs."""
     config = None
     if with_search:
         config = types.GenerateContentConfig(
@@ -30,12 +55,8 @@ def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str
     for m in models:
         for attempt in range(3):
             try:
-                response = _gemini_client.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                    config=config,
-                )
-                return response.text or ""
+                response = _generate(m, prompt, config)
+                return (response.text or ""), _extract_sources(response)
             except Exception as e:
                 last_error = e
                 err_str = str(e)
@@ -51,7 +72,10 @@ def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str
     raise RuntimeError(f"All Gemini models exhausted. Last error: {last_error}")
 
 
-VERTEX_REDIRECT = "vertexaisearch.cloud.google.com/grounding-api-redirect"
+def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str:
+    """Backward-compatible wrapper that drops the sources list."""
+    text, _ = gemini_chat_with_sources(prompt, with_search=with_search, model=model)
+    return text
 
 
 def clean_brief_text(text: str) -> str:
@@ -80,7 +104,7 @@ def clean_brief_text(text: str) -> str:
 
 
 def url_works(url: str, timeout: float = 6.0) -> bool:
-    """Return True if the URL responds with a non-error status within timeout."""
+    """True if the URL responds with a non-error status within timeout."""
     if not url or not isinstance(url, str) or not url.startswith("http"):
         return False
     if VERTEX_REDIRECT in url:
@@ -98,6 +122,43 @@ def url_works(url: str, timeout: float = 6.0) -> bool:
     except requests.RequestException as e:
         print(f"[url-check] {url} -> {type(e).__name__}: {e}")
         return False
+
+
+def resolve_url(url: str, timeout: float = 6.0) -> str:
+    """Follow redirects, return final URL. Returns original on error."""
+    if not url or not url.startswith("http"):
+        return url
+    headers = {"User-Agent": USER_AGENT}
+    try:
+        r = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        return r.url or url
+    except requests.RequestException:
+        return url
+
+
+def extract_domain(url: str) -> str:
+    """Bare domain, lowercased, no leading www."""
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+        host = host.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    except Exception:
+        return ""
+
+
+def resolve_grounding_domains(grounding_uris: list, max_resolve: int = 40) -> set:
+    """Follow Vertex redirect URIs in parallel, return set of real publisher domains."""
+    domains = set()
+    if not grounding_uris:
+        return domains
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        for resolved in ex.map(resolve_url, grounding_uris[:max_resolve]):
+            d = extract_domain(resolved)
+            if d and "vertexaisearch" not in d and "googleusercontent" not in d:
+                domains.add(d)
+    return domains
 
 
 def slack_post(text: str, channel: str = CHANNEL_ID) -> dict:
@@ -135,7 +196,6 @@ HEADLINE_RE = re.compile(r"^\*([^*\n]+?)\*\s*$", re.MULTILINE)
 
 
 def extract_dedup(messages: list) -> dict:
-    """Pull URLs, company entities, and headlines from recent channel posts."""
     seen_urls = set()
     seen_entities = []
     seen_headlines = []
