@@ -2,8 +2,9 @@
 import json
 import re
 from lib import (
-    gemini_chat, slack_post, slack_read_channel, extract_dedup,
-    get_today_context, regional_lean_for_day, url_works, CHANNEL_ID,
+    gemini_chat_with_sources, slack_post, slack_read_channel, extract_dedup,
+    get_today_context, regional_lean_for_day, url_works, extract_domain,
+    resolve_grounding_domains, CHANNEL_ID,
 )
 
 
@@ -11,18 +12,18 @@ def build_prompt(ctx, lean, dedup):
     seen_urls_str = "\n".join(f"- {u}" for u in sorted(dedup["urls"])[:150]) or "(none yet)"
     seen_entities_str = ", ".join(dedup["entities"][:60]) or "(none yet)"
     seen_headlines_str = "\n".join(f"- {h}" for h in dedup["headlines"][:40]) or "(none yet)"
-    return f"""You are researching today's "Commenda AM Brief" for Harvinder, a CPA at Commenda focused on US corporate tax service delivery and Commenda's accounting Ops layer.
+    return f"""You are researching today's "Commenda AM Brief" for Harvinder, a CPA at Commenda focused on US corporate tax service delivery (1120, 1120-F, K-2/K-3) and Commenda's accounting Ops layer.
 
 TODAY: {ctx['date_str']} ({ctx['weekday_name']})
 REGIONAL LEAN: {lean}
 
-Use Google Search to find FRESH news. Return findings as a single JSON object. Python will format the brief, you only provide the data.
+Use Google Search to find FRESH news. Return findings as a single JSON object. Python formats the brief, you only provide the data.
 
 ## ABSOLUTE ACCURACY RULES (CRITICAL)
-- NEVER fabricate URLs. The "url" field MUST be a URL that appeared in your Google Search results. If you cannot cite a real URL from your search results for an item, OMIT THAT ITEM.
-- NEVER invent product names, company names, funding amounts, customer lists, or partnerships. If you are not certain something exists, leave it out.
-- NEVER cite a URL just because it "looks plausible." A made-up URL is worse than missing news.
-- If you cannot find at least 3 verifiable items today, return fewer items. Quiet days stay quiet.
+- NEVER fabricate URLs. The "url" field MUST be a URL that appeared in your Google Search results.
+- The system rejects any item whose URL domain is not in the list of domains Google Search actually visited.
+- NEVER invent product names, company names, funding amounts, customer lists, or partnerships.
+- If you cannot find at least 3 verifiable items, return fewer items.
 
 ## Coverage priorities (in order)
 1. AI launches in finance/accounting/tax: Anthropic, OpenAI, Google. Big 4 partnerships and AI rollouts (Deloitte, PwC, EY, KPMG). Vendor AI: Intuit, Xero, QuickBooks, Sage, Zoho, Thomson Reuters, Avalara, Wolters Kluwer.
@@ -30,16 +31,22 @@ Use Google Search to find FRESH news. Return findings as a single JSON object. P
 3. Corp tax tech: return automation, e-filing, IRS / HMRC / MCA / SAT / ICAI tech announcements, tax provision tools, AI tax-prep.
 4. Service-delivery and ops tech for accounting firms.
 5. Commenda-adjacent competitors in multi-entity, global compliance, entity management.
+6. Direct tax + accounting reporting (category "REPORTING") — INCLUDE ONE ITEM ONLY WHEN MATERIAL:
+   - IRS form or schedule changes affecting 1120, 1120-F, K-2, K-3
+   - IRS revenue procedures, rulings, or notices materially affecting corporate tax
+   - FASB / IASB / PCAOB / SEC standard changes with corporate reporting impact
+   - International tax developments: Pillar 2 / GloBE country implementations, BEAT, Section 174, Section 163(j), CbCR
+   - Cross-border reporting mandate shifts: EU CSRD, India ICAI major standards, Mexico CFDI schema, UK MTD
+   - MUST be national or international significance. Skip niche state-level rules.
+   - Do NOT force one every day. Only include if genuinely material news dropped in the freshness window.
 
 ## Geography
-US-heavy baseline. Today's regional lean: {lean} Skip pure GAAP/regulatory updates unless tied to tech adoption.
+US-heavy baseline. Today's regional lean: {lean} For REPORTING, US federal takes priority; international only if it affects US multinationals or Commenda's cross-border book.
 
 ## Freshness and anti-repetition (CRITICAL)
 - HARD CUTOFF: only news from the last 36 hours. Monday brief may include Fri-Mon to bridge weekend.
-- Already covered companies in the last 14 days are listed below. Do NOT cover a listed company unless you have a GENUINELY NEW development to cite (new partner, new product feature, new funding round, regulatory response, leadership change, customer win). "The company is still relevant" is NOT enough.
+- Already covered companies/topics in the last 14 days are listed below. Do NOT re-cover unless GENUINELY NEW development in the last 36 hours.
 - Do NOT include URLs from the recently-posted list.
-- Items > 48 hours old need a strong fresh angle.
-- Quiet days stay quiet. Output 3-4 items if needed. Never pad with stale content.
 
 ## Recently covered companies (DO NOT REPEAT unless new development)
 {seen_entities_str}
@@ -52,62 +59,94 @@ US-heavy baseline. Today's regional lean: {lean} Skip pure GAAP/regulatory updat
 
 ## OUTPUT: JSON ONLY
 
-Return EXACTLY this JSON structure. No prose before or after, no code fences, no explanation.
+Return EXACTLY this JSON structure. No prose before or after, no code fences.
 
 {{
   "items": [
     {{
-      "category": "AI",
-      "entity": "ANTHROPIC",
-      "date": "MAY 11",
-      "headline": "Anthropic ships ten finance agent templates and Claude Opus 4.7.",
-      "body": "Pre-built agents cover GL reconciler, month-end closer, statement auditor, and KYC screener. Customers include Citadel, FIS, BNY, Mizuho, and Travelers.",
-      "take": "Two templates land directly on Commenda's ops layer. Worth pressure-testing whether to wrap or extend.",
-      "url": "https://www.anthropic.com/news/finance-agents",
-      "url_display": "anthropic.com/news/finance-agents"
+      "category": "REPORTING",
+      "entity": "IRS",
+      "date": "JUL 15",
+      "headline": "IRS releases revised Schedule K-3 with new Pillar 2 disclosure requirements.",
+      "body": "The draft schedule adds three new columns for GloBE income adjustments effective for tax year 2026 filings. Public comment period runs through August 30.",
+      "take": "Multi-entity 1120 clients with foreign subs will need K-3 updates. Front-load the workpaper build.",
+      "client_q": "Do we need to file the new K-3 columns for tax year 2025 or only 2026?",
+      "url": "https://www.irs.gov/pub/irs-drop/some-notice",
+      "url_display": "irs.gov/pub/irs-drop/some-notice"
     }}
   ],
-  "watching": ["Anthropic finance-agents cookbook", "KPMG Tax AI Accelerator", "Sage Finance Intelligence Agent"],
+  "watching": ["Pillar 2 US implementation timeline", "Section 174 R&E amortization repeal bill", "Anthropic finance-agents cookbook", "PCAOB AI audit standard draft"],
   "skipped": ["Generic AI tax tools listicles", "Routine IRS season-prep posts", "Recycled Big 4 trend pieces"]
 }}
 
 ## Field rules
-- "category": exactly ONE of: AI, DEAL, PRODUCT, DISTRIBUTION, TAX AUTO, BIG 4, COMPETITOR, REGULATORY, TOOL, INDIA, UK, MEXICO, EU, LATAM.
-- "entity": uppercase COMPANY name (ANTHROPIC, INTUIT, EY, RILLET, ZAMP). Never a category, never a region.
-- "date": "MON DD" (e.g., "MAY 11"). Must be the actual date of the news.
-- "headline": one sentence, declarative, ends with a period, plain text only (no asterisks, no formatting).
-- "body": exactly two sentences, ≤ 45 words combined, factual.
-- "take": one sentence, ≤ 30 words, Commenda implication. No "Take:" prefix.
-- "url": ORIGINAL publisher URL, FROM YOUR SEARCH RESULTS. NEVER fabricated. NEVER a Google Search redirect. Verify it appears in your grounding search results before including.
-- "url_display": short readable form, "domain/path".
-- "watching": 3-4 short tags of ongoing storylines.
+- "category": exactly ONE of: AI, DEAL, PRODUCT, DISTRIBUTION, TAX AUTO, BIG 4, COMPETITOR, REGULATORY, REPORTING, TOOL, INDIA, UK, MEXICO, EU, LATAM.
+- "entity": uppercase COMPANY, agency, or standard-setter name (ANTHROPIC, INTUIT, EY, RILLET, IRS, FASB, PCAOB, SEC, OECD).
+- "date": "MON DD" (e.g., "JUL 15").
+- "headline": one sentence, declarative, period at end, plain text.
+- "body": two sentences, ≤ 45 words combined.
+- "take": one sentence, ≤ 30 words.
+- "client_q": OPTIONAL. Include ONLY on items likely to trigger a client question (tax/reporting changes, product deprecations, big competitor moves, funding that shifts competitive landscape). One question a client would realistically ask Harvinder, phrased in the client's voice. ≤ 25 words. Omit the field entirely if not applicable. Max 2 items per brief should have this.
+- "url": MUST be from your actual Google Search results.
+- "url_display": short "domain/path" form.
+- "watching": 4-6 short tags. IMPORTANT: include 1-2 PENDING REGULATIONS in this list (e.g. "Pillar 2 US implementation timeline", "Section 174 R&E repeal bill", "PCAOB AI audit standard draft", "SEC climate disclosure rule status") alongside the usual ongoing storylines.
 - "skipped": 3-5 categories of noise filtered out.
 
 ## Length
-- "items": 5 typical, 6-7 on heavy news days, 3-4 on quiet days. Never 8 or more. Never pad.
+- "items": 5 typical, 6-7 heavy news, 3-4 quiet. Never 8+.
 - Every brief must include at least one item with category "TOOL".
+- REPORTING is opt-in based on news day.
+- "client_q" appears on at most 2 items in any brief.
 
-NO em-dashes (`—`) anywhere in any field.
+## Suggested search queries (rotate, mix)
+Tech / tools:
+- "Anthropic Claude finance accounting [current month year]"
+- "Big 4 AI agent announcement [current month year]"
+- "Intuit Xero Sage AI news [current month year]"
+- "accounting startup funding [current month year]"
+- "AI ERP multi-entity news [current month year]"
 
-## Process
-1. Run multiple Google Search queries for the last 36 hours of news across coverage priorities.
-2. For each candidate item: confirm the URL exists in your search results. Discard if you can't confirm.
-3. Confirm the item is NOT in the recently posted/covered lists (unless new development).
-4. Construct the JSON object.
-5. Output ONLY the JSON.
+Direct tax + reporting (run 1-2 per day):
+- "IRS 1120 revenue procedure notice [current year]"
+- "IRS K-2 K-3 update [current year]"
+- "FASB accounting standards update [current year]"
+- "PCAOB standard release [current year]"
+- "SEC corporate reporting rule [current year]"
+- "Pillar 2 GloBE country implementation [current year]"
+- "Section 174 R&E capitalization update [current year]"
+- "OECD international tax rules [current year]"
+
+Pending regulations to track in WATCHING (rotate):
+- Pillar 2 US implementation status
+- Section 174 R&E amortization repeal / retroactive fix
+- PCAOB AI audit standard drafts
+- SEC climate disclosure rule status
+- IRS form draft comment periods
+- FASB open exposure drafts
+- India ICAI upcoming standard changes
+- EU CSRD phase-in dates
+
+NO em-dashes anywhere.
 
 OUTPUT JSON NOW.
 """
 
 
-def format_brief(data, ctx):
+def format_brief(data, ctx, grounding_domains=None):
     raw_items = data.get("items", [])
     items = []
     for it in raw_items:
         url = (it.get("url") or "").strip()
+        url_domain = extract_domain(url)
+
         if not url_works(url):
-            print(f"[url-check] DROPPING item, URL not reachable: {url} (headline: {it.get('headline', '')[:60]})")
+            print(f"[validation] DROP unreachable: {url}")
             continue
+
+        if grounding_domains and url_domain not in grounding_domains:
+            print(f"[validation] DROP domain not grounded: {url_domain} (url: {url})")
+            continue
+
         items.append(it)
 
     n = len(items)
@@ -139,17 +178,21 @@ def format_brief(data, ctx):
         headline = (it.get("headline") or "").strip()
         body = (it.get("body") or "").strip()
         take = (it.get("take") or "").strip()
+        client_q = (it.get("client_q") or "").strip()
         url = (it.get("url") or "").strip()
         url_display = (it.get("url_display") or url).strip()
-        block = (
-            f"`{i:02d} ▎ {cat} · {ent} ▎ {date}`\n"
-            f"*{headline}*\n"
-            f"{body}\n"
-            f"\n"
-            f"> _Take:_ {take}\n"
-            f"↳ <{url}|{url_display}>"
-        )
-        blocks.append(block)
+
+        lines = [
+            f"`{i:02d} ▎ {cat} · {ent} ▎ {date}`",
+            f"*{headline}*",
+            body,
+            "",
+            f"> _Take:_ {take}",
+        ]
+        if client_q:
+            lines.append(f"> _Client Q:_ {client_q}")
+        lines.append(f"↳ <{url}|{url_display}>")
+        blocks.append("\n".join(lines))
 
     separator = "\n\n─────────────────────────────\n\n"
     stories = separator.join(blocks)
@@ -181,17 +224,25 @@ def main():
     lean = regional_lean_for_day(ctx["weekday"])
     msgs = slack_read_channel(limit=100, days=14)
     dedup = extract_dedup(msgs)
-    raw = gemini_chat(build_prompt(ctx, lean, dedup), with_search=True)
+
+    raw, sources = gemini_chat_with_sources(build_prompt(ctx, lean, dedup), with_search=True)
+    print(f"[grounding] {len(sources)} source URIs from Google Search")
+
     try:
         data = parse_gemini_json(raw)
     except json.JSONDecodeError as e:
         print(f"JSON parse error: {e}")
         print(f"Raw Gemini output:\n{raw[:2000]}")
         raise
-    brief_text = format_brief(data, ctx)
+
+    grounding_domains = resolve_grounding_domains(sources)
+    print(f"[grounding] {len(grounding_domains)} unique source domains: {sorted(grounding_domains)}")
+
+    brief_text = format_brief(data, ctx, grounding_domains=grounding_domains)
     if brief_text is None:
-        print("No items survived URL validation; not posting today.")
+        print("No items survived validation; not posting today.")
         return
+
     result = slack_post(brief_text)
     print(f"Brief posted: ts={result.get('ts')}, channel={CHANNEL_ID}")
 
