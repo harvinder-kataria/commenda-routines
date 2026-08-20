@@ -25,6 +25,33 @@ Use Google Search to find FRESH news. Return findings as a single JSON object. P
 - NEVER invent product names, company names, funding amounts, customer lists, or partnerships.
 - If you cannot find at least 3 verifiable items, return fewer items.
 
+## RELEVANCE GATE (CRITICAL: filters what publishes)
+
+Every item in "items" MUST have a concrete Commenda hook. The "commenda_hook" field, one sentence, must name ONE of:
+- A Commenda service line affected (1120 prep, 1120-F, K-2/K-3, multi-entity consolidation, intercompany eliminations, month-end close, transfer pricing, indirect tax, entity management, cross-border compliance)
+- A Commenda client profile affected (venture-backed SaaS with foreign subs, mid-market US corporations with cross-border ops, US-headquartered clients with Indian subsidiaries, PE-owned roll-ups, etc.)
+- A partner or BD angle (Rillet implementation partnership, Big 4 client-poach angle, referral flow shift)
+
+Vague hooks like "may affect the accounting industry" or "worth watching" are NOT concrete. If you cannot name a concrete hook, do NOT include the item in "items". Move it to "archived" with a short reason.
+
+## INDIVIDUAL-ONLY TAX ITEMS (SPECIAL INVERSION)
+
+Items whose ONLY affected taxpayer is a natural person (individual sole traders, individual landlords, personal income tax rates, individual filing deadlines, personal allowances, self-assessment mechanics) MUST BE ARCHIVED unless there is a clear DOWNSTREAM CORPORATE or FIRM-CAPACITY hook stated explicitly in the take.
+
+Valid firm-capacity or downstream hook examples:
+- "UK accounting firms losing capacity to handle corporate work" (for MTD-ITSA)
+- "Personal rate change triggers owner-comp restructuring for pass-through corporations"
+- "Sole-trader displacement creates BD flow for corporate structuring services"
+
+For THIS class of items ONLY, invert the standing "when in doubt, publish" rule: when in doubt on an individual-only item, ARCHIVE it. Everywhere else, keep the "when in doubt, publish" bias intact.
+
+## TEST CASES (calibration)
+
+- UK MTD ITSA rollout to sole traders and landlords → ARCHIVE. Reason: "individual-only, no firm-capacity hook stated." Only publish if the hook "UK accounting firms losing capacity to handle corporate work" is real and appears in the take.
+- France B2B e-invoicing mandate → PUBLISH. Reason: indirect tax, affects business entities, direct ops impact on multi-country clients with French subsidiaries.
+- Personal income tax rate change (any jurisdiction) → ARCHIVE. Only publish if a specific downstream corporate action is stated (e.g., pass-through owner-comp restructuring).
+- US corporate tax rate change → PUBLISH. Direct 1120 impact, universal Commenda client relevance.
+
 ## Coverage priorities (in order)
 1. AI launches in finance/accounting/tax: Anthropic, OpenAI, Google. Big 4 partnerships and AI rollouts (Deloitte, PwC, EY, KPMG). Vendor AI: Intuit, Xero, QuickBooks, Sage, Zoho, Thomson Reuters, Avalara, Wolters Kluwer.
 2. Accounting Tools Watch (every brief must include at least one item with category "TOOL"). Watchlist: Rillet, Puzzle, DualEntry, Numeric, Campfire, Inkle, Pilot, Tola, Sage Intacct, Anrok, Zamp, Column Tax, Onshore, Combinely, Black Ore, Aiwyn, Karbon, Brex, Mercury, Ramp, FloQast, BlackLine, Trullion, Vic.ai.
@@ -36,9 +63,9 @@ Use Google Search to find FRESH news. Return findings as a single JSON object. P
    - IRS revenue procedures, rulings, or notices materially affecting corporate tax
    - FASB / IASB / PCAOB / SEC standard changes with corporate reporting impact
    - International tax developments: Pillar 2 / GloBE country implementations, BEAT, Section 174, Section 163(j), CbCR
-   - Cross-border reporting mandate shifts: EU CSRD, India ICAI major standards, Mexico CFDI schema, UK MTD
+   - Cross-border reporting mandate shifts: EU CSRD, India ICAI major standards, Mexico CFDI schema, UK MTD for BUSINESSES only (not ITSA/individuals)
    - MUST be national or international significance. Skip niche state-level rules.
-   - Do NOT force one every day. Only include if genuinely material news dropped in the freshness window.
+   - Do NOT force one every day.
 
 ## Geography
 US-heavy baseline. Today's regional lean: {lean} For REPORTING, US federal takes priority; international only if it affects US multinationals or Commenda's cross-border book.
@@ -71,9 +98,13 @@ Return EXACTLY this JSON structure. No prose before or after, no code fences.
       "body": "The draft schedule adds three new columns for GloBE income adjustments effective for tax year 2026 filings. Public comment period runs through August 30.",
       "take": "Multi-entity 1120 clients with foreign subs will need K-3 updates. Front-load the workpaper build.",
       "client_q": "Do we need to file the new K-3 columns for tax year 2025 or only 2026?",
+      "commenda_hook": "Multi-entity 1120 clients with foreign subs need K-3 workpaper updates ahead of TY 2026 filings.",
       "url": "https://www.irs.gov/pub/irs-drop/some-notice",
       "url_display": "irs.gov/pub/irs-drop/some-notice"
     }}
+  ],
+  "archived": [
+    {{"headline": "UK MTD ITSA rollout begins for sole traders over 50k", "reason": "individual-only, no firm-capacity hook stated"}}
   ],
   "watching": ["Pillar 2 US implementation timeline", "Section 174 R&E amortization repeal bill", "Anthropic finance-agents cookbook", "PCAOB AI audit standard draft"],
   "skipped": ["Generic AI tax tools listicles", "Routine IRS season-prep posts", "Recycled Big 4 trend pieces"]
@@ -81,20 +112,21 @@ Return EXACTLY this JSON structure. No prose before or after, no code fences.
 
 ## Field rules
 - "category": exactly ONE of: AI, DEAL, PRODUCT, DISTRIBUTION, TAX AUTO, BIG 4, COMPETITOR, REGULATORY, REPORTING, TOOL, INDIA, UK, MEXICO, EU, LATAM.
-- "entity": uppercase COMPANY, agency, or standard-setter name (ANTHROPIC, INTUIT, EY, RILLET, IRS, FASB, PCAOB, SEC, OECD).
+- "entity": uppercase COMPANY, agency, or standard-setter name.
 - "date": "MON DD" (e.g., "JUL 15").
 - "headline": one sentence, declarative, period at end, plain text.
 - "body": two sentences, ≤ 45 words combined.
-- "take": one sentence, ≤ 30 words.
-- "client_q": OPTIONAL. Include ONLY on items likely to trigger a client question (tax/reporting changes, product deprecations, big competitor moves, funding that shifts competitive landscape). One question a client would realistically ask Harvinder. ≤ 25 words. Omit the field entirely if not applicable. Max 2 items per brief should have this.
-- "url": use the URL exactly as it appears in your Google Search results (may be a redirect URL, the system will resolve it).
-- "url_display": short "domain/path" form, based on the actual publisher domain if you know it.
+- "take": one sentence, ≤ 30 words. For individual-only tax items, the firm-capacity or downstream-corporate hook MUST be stated here.
+- "client_q": OPTIONAL. Include ONLY on items likely to trigger a client question. ≤ 25 words. Max 2 items per brief.
+- "commenda_hook": REQUIRED on every item. One sentence naming a concrete service line, client profile, or partner/BD angle. Vague hooks disqualify the item.
+- "url": use the URL exactly as it appears in your Google Search results.
+- "url_display": short "domain/path" form.
+- "archived": REQUIRED list, can be empty. Items considered but not published, each with keys "headline" and "reason".
 
 ## Length
 - "items": 5 typical, 6-7 heavy news, 3-4 quiet. Never 8+.
 - Every brief must include at least one item with category "TOOL".
 - REPORTING is opt-in based on news day.
-- "client_q" appears on at most 2 items in any brief.
 
 ## Suggested search queries (rotate, mix)
 Tech / tools:
@@ -116,7 +148,7 @@ Direct tax + reporting (run 1-2 per day):
 
 Pending regulations to track in WATCHING (rotate):
 - Pillar 2 US implementation status
-- Section 174 R&E amortization repeal / retroactive fix
+- Section 174 R&E amortization repeal
 - PCAOB AI audit standard drafts
 - SEC climate disclosure rule status
 - IRS form draft comment periods
@@ -133,10 +165,13 @@ OUTPUT JSON NOW.
 def format_brief(data, ctx, grounding_domains=None):
     raw_items = data.get("items", [])
     items = []
+    python_archived = []
+
     for it in raw_items:
         url = (it.get("url") or "").strip()
+        headline = (it.get("headline") or "").strip()
+        hook = (it.get("commenda_hook") or "").strip()
 
-        # Resolve Vertex Search grounding redirects to the real publisher URL
         if VERTEX_REDIRECT in url:
             resolved = resolve_url(url)
             if resolved and VERTEX_REDIRECT not in resolved and resolved.startswith("http"):
@@ -147,20 +182,26 @@ def format_brief(data, ctx, grounding_domains=None):
                 if dom and (not it.get("url_display") or VERTEX_REDIRECT in (it.get("url_display") or "")):
                     it["url_display"] = dom
             else:
-                print(f"[validation] DROP could not resolve Vertex redirect: {url[:80]}...")
+                python_archived.append({"headline": headline, "reason": "vertex redirect unresolvable"})
                 continue
 
         url_domain = extract_domain(url)
 
         if not url_works(url):
-            print(f"[validation] DROP unreachable: {url}")
+            python_archived.append({"headline": headline, "reason": "URL unreachable"})
             continue
 
         if grounding_domains and url_domain not in grounding_domains:
-            print(f"[validation] DROP domain not grounded: {url_domain} (url: {url})")
+            python_archived.append({"headline": headline, "reason": f"domain {url_domain} not in grounding sources"})
+            continue
+
+        if not hook:
+            python_archived.append({"headline": headline, "reason": "no commenda_hook stated (relevance gate)"})
             continue
 
         items.append(it)
+
+    all_archived = list(data.get("archived", []) or []) + python_archived
 
     n = len(items)
     if n == 0:
@@ -192,6 +233,7 @@ def format_brief(data, ctx, grounding_domains=None):
         body = (it.get("body") or "").strip()
         take = (it.get("take") or "").strip()
         client_q = (it.get("client_q") or "").strip()
+        hook = (it.get("commenda_hook") or "").strip()
         url = (it.get("url") or "").strip()
         url_display = (it.get("url_display") or url).strip()
 
@@ -204,6 +246,8 @@ def format_brief(data, ctx, grounding_domains=None):
         ]
         if client_q:
             lines.append(f"> _Client Q:_ {client_q}")
+        if hook:
+            lines.append(f"_Hook: {hook}_")
         lines.append(f"↳ <{url}|{url_display}>")
         blocks.append("\n".join(lines))
 
@@ -212,9 +256,19 @@ def format_brief(data, ctx, grounding_domains=None):
 
     watching = " · ".join(data.get("watching", [])) or "(quiet)"
     skipped = " · ".join(data.get("skipped", [])) or "(none)"
+
+    archived_lines = []
+    for a in all_archived:
+        hl = (a.get("headline") or "").strip()
+        reason = (a.get("reason") or "").strip()
+        if hl and reason:
+            archived_lines.append(f"{hl} ({reason})")
+    archived_str = " · ".join(archived_lines[:6]) or "(none)"
+
     footer = (
         "```\n"
         f"WATCHING  {watching}\n"
+        f"ARCHIVED  {archived_str}\n"
         f"SKIPPED   {skipped}\n"
         "```"
     )
