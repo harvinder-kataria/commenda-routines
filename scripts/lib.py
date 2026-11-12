@@ -16,7 +16,10 @@ CHANNEL_ID = "C0B34GAUH0Q"
 CANVAS_ID = "F0B34R53F7Y"
 USER_ID = "U09SB67C13P"
 
-_gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+_gemini_client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    http_options=types.HttpOptions(api_version="v1beta"),
+)
 
 FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash"]
 USER_AGENT = "Mozilla/5.0 (compatible; CommendaAMBot/1.0; +https://github.com/harvinder-kataria/commenda-routines)"
@@ -31,7 +34,6 @@ def _generate(model: str, prompt: str, config):
 
 
 def _extract_sources(response) -> list:
-    """Pull grounding source URIs from a Gemini response (real URLs from Google Search)."""
     sources = []
     for candidate in (response.candidates or []):
         gm = getattr(candidate, "grounding_metadata", None)
@@ -51,7 +53,6 @@ def _finish_reason(response) -> str:
 
 
 def gemini_chat_with_sources(prompt: str, with_search: bool = True, model: str = None):
-    """Returns (text, grounding_source_uris). Retries on transient errors AND on empty responses."""
     config = None
     if with_search:
         config = types.GenerateContentConfig(
@@ -65,8 +66,6 @@ def gemini_chat_with_sources(prompt: str, with_search: bool = True, model: str =
                 response = _generate(m, prompt, config)
                 text = (response.text or "").strip()
                 sources = _extract_sources(response)
-
-                # Empty-response guard: treat as retryable
                 if len(text) < MIN_RESPONSE_LEN:
                     fr = _finish_reason(response)
                     print(f"[gemini] {m} empty response (attempt {attempt+1}/3), finish_reason={fr}, len={len(text)}")
@@ -75,8 +74,7 @@ def gemini_chat_with_sources(prompt: str, with_search: bool = True, model: str =
                         time.sleep(15 * (attempt + 1))
                         continue
                     else:
-                        break  # exhausted this model, fall through to next
-
+                        break
                 return text, sources
             except Exception as e:
                 last_error = e
@@ -94,13 +92,11 @@ def gemini_chat_with_sources(prompt: str, with_search: bool = True, model: str =
 
 
 def gemini_chat(prompt: str, with_search: bool = True, model: str = None) -> str:
-    """Backward-compatible wrapper that drops the sources list."""
     text, _ = gemini_chat_with_sources(prompt, with_search=with_search, model=model)
     return text
 
 
 def clean_brief_text(text: str) -> str:
-    """Strip Google Search redirect wrappers, convert Markdown links to Slack format."""
     text = re.sub(
         r'\[\[([^\]]+)\]\((https?://[^\)\s]+)\)\]\(https?://' + re.escape(VERTEX_REDIRECT) + r'/[^\)]+\)',
         r'<\2|\1>',
@@ -125,7 +121,6 @@ def clean_brief_text(text: str) -> str:
 
 
 def url_works(url: str, timeout: float = 6.0) -> bool:
-    """True if the URL responds with a non-error status within timeout."""
     if not url or not isinstance(url, str) or not url.startswith("http"):
         return False
     if VERTEX_REDIRECT in url:
@@ -146,7 +141,6 @@ def url_works(url: str, timeout: float = 6.0) -> bool:
 
 
 def resolve_url(url: str, timeout: float = 6.0) -> str:
-    """Follow redirects, return final URL. Returns original on error."""
     if not url or not url.startswith("http"):
         return url
     headers = {"User-Agent": USER_AGENT}
@@ -158,7 +152,6 @@ def resolve_url(url: str, timeout: float = 6.0) -> str:
 
 
 def extract_domain(url: str) -> str:
-    """Bare domain, lowercased, no leading www."""
     try:
         host = urllib.parse.urlparse(url).hostname or ""
         host = host.lower()
@@ -170,7 +163,6 @@ def extract_domain(url: str) -> str:
 
 
 def resolve_grounding_domains(grounding_uris: list, max_resolve: int = 40) -> set:
-    """Follow Vertex redirect URIs in parallel, return set of real publisher domains."""
     domains = set()
     if not grounding_uris:
         return domains
